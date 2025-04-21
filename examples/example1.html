@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>PAN Light Demo</title>
+    <style>
+        body { font-family: sans-serif; padding: 2em; }
+        .display { border: 1px solid #ccc; padding: 1em; height: 100px; margin-bottom: 1em; overflow-y: auto; }
+        .controls { margin-bottom: 1em; }
+        .lights { display: flex; gap: 1em; margin-top: 1em; }
+        .light {
+            width: 40px; height: 40px;
+            border-radius: 50%;
+            background-color: #ddd;
+            transition: background-color 0.2s;
+            border: 1px solid #999;
+        }
+        .light.red.on { background-color: red; }
+        .light.green.on { background-color: limegreen; }
+        .light.blue.on { background-color: dodgerblue; }
+    </style>
+</head>
+<body>
+<h2>PAN Light Demo</h2>
+<input id="textInput" type="text" placeholder="Type here...">
+<div class="display" id="display"></div>
+
+<div class="controls">
+    <button id="redBtn">Red Toggle</button>
+    <button id="greenBtn">Green Flash</button>
+    <button id="blueBtn">Blue Hold</button>
+</div>
+<div class="lights">
+    <div id="redLight" class="light red"></div>
+    <div id="greenLight" class="light green"></div>
+    <div id="blueLight" class="light blue"></div>
+</div>
+
+<script type="module">
+import { PanClient } from './pan-client.mjs';
+
+const pan = new PanClient({
+    url: 'ws://localhost:5295', 
+    token: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJjbGllbnRfbmFtZSI6ImJvYiIsImlhdCI6MTc0NDA4ODYxNywiZXhwIjoxNzc1NjI0NjE3LCJhdWQiOiJwYW4tbmV0d29yayJ9.P0YbRvbnF-1GvjBPjrMfg2YauUKFC3MuBCrupF4c8Cw',
+    appId: 'b28ce075-5bf3-4803-bb50-ae96701c1469'
+});
+
+const groupName = 'lights.demo';
+let group;
+
+const textInput = document.getElementById('textInput');
+const display = document.getElementById('display');
+const redLight = document.getElementById('redLight');
+const greenLight = document.getElementById('greenLight');
+const blueLight = document.getElementById('blueLight');
+
+let suppressInput = false;
+
+textInput.addEventListener('input', () => {
+    if (suppressInput) return;
+    const value = textInput.value;
+    group.send('text.update', { value });
+});
+
+function updateText(value) {
+    suppressInput = true;
+    textInput.value = value;
+    display.textContent = value;
+    suppressInput = false;
+}
+
+function lightUp(light) {
+    light.classList.add('on');
+    setTimeout(() => light.classList.remove('on'), 1000);
+}
+
+function setupButtons() {
+    document.getElementById('redBtn').addEventListener('click', () => {
+        group.send('light.red.toggle', {});
+    });
+
+    document.getElementById('greenBtn').addEventListener('click', () => {
+        group.send('light.green.flash', {});
+    });
+
+    const blueBtn = document.getElementById('blueBtn');
+    blueBtn.addEventListener('mousedown', () => {
+        group.send('light.blue.on', {});
+    });
+    blueBtn.addEventListener('mouseup', () => {
+        group.send('light.blue.off', {});
+    });
+    blueBtn.addEventListener('mouseleave', () => {
+        group.send('light.blue.off', {});
+    });
+}
+
+function setupHandlers(g) {
+    g.on('light.red.toggle', () => {
+        redLight.classList.toggle('on');
+    });
+
+    g.on('light.green.flash', () => {
+        lightUp(greenLight);
+    });
+
+    g.on('light.blue.on', () => {
+        blueLight.classList.add('on');
+    });
+    g.on('light.blue.off', () => {
+        blueLight.classList.remove('on');
+    });
+
+    g.on('text.update', (msg) => {
+        updateText(msg.payload.value);
+    });
+}
+
+(async () => {
+    await pan.connect();
+    let groupId = await pan.getGroupId(groupName);
+    group = pan.joinGroup(groupId, [
+        'light.red.toggle',
+        'light.green.flash',
+        'light.blue.on',
+        'light.blue.off',
+        'text.update'
+    ]);
+    setupHandlers(group);
+    setupButtons();
+})();
+</script>
+</body>
+</html>

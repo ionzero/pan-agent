@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>PAN Light Demo</title>
+    <style>
+        body { font-family: sans-serif; padding: 2em; }
+        .display { border: 1px solid #ccc; padding: 1em; height: 100px; margin-top: 1em; overflow-y: auto; }
+        .controls { margin-bottom: 1em; }
+        .lights { display: flex; gap: 1em; margin-top: 1em; }
+        .light {
+            width: 40px; height: 40px;
+            border-radius: 50%;
+            background-color: #ddd;
+            transition: background-color 0.2s;
+            border: 1px solid #999;
+        }
+        .light.red.on { background-color: red; }
+        .light.green.on { background-color: limegreen; }
+        .light.blue.on { background-color: dodgerblue; }
+    </style>
+</head>
+<body>
+<h2>PAN Light Demo</h2>
+<input id="nameInput" type="text" placeholder="Your name">
+<input id="textInput" type="text" placeholder="Type here...">
+
+<div class="controls">
+    <button id="redBtn">Red Toggle</button>
+    <button id="greenBtn">Green Flash</button>
+    <button id="blueBtn">Blue Hold</button>
+</div>
+<div class="lights">
+    <div id="redLight" class="light red"></div>
+    <div id="greenLight" class="light green"></div>
+    <div id="blueLight" class="light blue"></div>
+</div>
+<div class="display" id="display"></div>
+
+<script type="module">
+import { PanAgent } from './pan-agent.mjs';
+
+// UI element references
+const nameInput = document.getElementById('nameInput');
+const textInput = document.getElementById('textInput');
+const display = document.getElementById('display');
+const redLight = document.getElementById('redLight');
+const greenLight = document.getElementById('greenLight');
+const blueLight = document.getElementById('blueLight');
+
+// 1. Create a new PAN client instance
+const pan = new PanAgent({
+    url: 'ws://localhost:5295', 
+    token: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJjbGllbnRfbmFtZSI6ImJvYiIsImlhdCI6MTc0NDA4ODYxNywiZXhwIjoxNzc1NjI0NjE3LCJhdWQiOiJwYW4tbmV0d29yayJ9.P0YbRvbnF-1GvjBPjrMfg2YauUKFC3MuBCrupF4c8Cw',
+    appId: 'b28ce075-5bf3-4803-bb50-ae96701c1469'
+});
+
+const groupName = 'lights.demo';
+let group;
+
+// 2. Connect to PAN, join the group, and register interest in specific message types
+(async () => {
+    await pan.connect();
+    let groupId = await pan.getGroupId(groupName);
+    console.log('Group ID:', groupId);
+    group = pan.joinGroup(groupId, [
+        'light.red.toggle',
+        'light.green.flash',
+        'light.blue.on',
+        'light.blue.off',
+        'text.update'
+    ]);
+    setupHandlers(group); // 3. Set up handlers for messages received from PAN
+    setupButtons();       // 4. Wire up the user interface
+})();
+
+// Set up listeners for incoming PAN messages
+function setupHandlers(group) {
+    group.on('light.red.toggle', (msg) => {
+        if (msg.payload.state) {
+            redLight.classList.add('on');
+        } else {
+            redLight.classList.remove('on');
+        }
+        logEvent(`${msg.payload.name || 'someone'} set red ${msg.payload.state ? 'on' : 'off'}`);
+    });
+
+    group.on('light.green.flash', (msg) => {
+        lightUp(greenLight);
+        logEvent(`${msg.payload.name || 'someone'} flashed green`);
+    });
+
+    group.on('light.blue.on', (msg) => {
+        blueLight.classList.add('on');
+        logEvent(`${msg.payload.name || 'someone'} pressed blue`);
+    });
+    group.on('light.blue.off', (msg) => {
+        blueLight.classList.remove('on');
+        logEvent(`${msg.payload.name || 'someone'} released blue`);
+    });
+
+    group.on('text.update', (msg) => {
+        updateText(msg.payload.value);
+        logEvent(`${msg.payload.name || 'someone'} updated text`);
+    });
+}
+
+
+// Set up UI buttons to send PAN messages
+function setupButtons() {
+    document.getElementById('redBtn').addEventListener('click', () => {
+        const isOn = redLight.classList.toggle('on');
+        const name = nameInput.value || 'anonymous';
+        group.send('light.red.toggle', { name, state: isOn });
+    });
+
+    document.getElementById('greenBtn').addEventListener('click', () => {
+        lightUp(greenLight);
+        const name = nameInput.value || 'anonymous';
+        group.send('light.green.flash', { name });
+    });
+
+    const blueBtn = document.getElementById('blueBtn');
+    blueBtn.addEventListener('mousedown', () => {
+        blueLight.classList.add('on');
+        const name = nameInput.value || 'anonymous';
+        group.send('light.blue.on', { name });
+    });
+    blueBtn.addEventListener('mouseup', () => {
+        blueLight.classList.remove('on');
+        const name = nameInput.value || 'anonymous';
+        group.send('light.blue.off', { name });
+    });
+    blueBtn.addEventListener('mouseleave', () => {
+        blueLight.classList.remove('on');
+        const name = nameInput.value || 'anonymous';
+        group.send('light.blue.off', { name });
+    });
+}
+let suppressInput = false;
+
+// Send text updates as PAN messages
+textInput.addEventListener('input', () => {
+    if (suppressInput) return;
+    const value = textInput.value;
+    const name = nameInput.value || 'anonymous';
+    group.send('text.update', { value, name });
+});
+
+// Add an entry to the event display log
+function logEvent(text) {
+    const entry = document.createElement('div');
+    entry.textContent = text;
+    display.appendChild(entry);
+    display.scrollTop = display.scrollHeight;
+}
+
+// Update local input field without triggering a PAN broadcast
+function updateText(value) {
+    suppressInput = true;
+    textInput.value = value;
+    suppressInput = false;
+}
+
+// Temporarily light up a circle
+function lightUp(light) {
+    light.classList.add('on');
+    setTimeout(() => light.classList.remove('on'), 1000);
+}
+
+</script>
+</body>
+</html>
+

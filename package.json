@@ -1,0 +1,27 @@
+{
+  "name": "pan-agent",
+  "version": "0.1.0",
+  "description": "Universal PAN network agent for browser and Node.js environments",
+  "main": "pan-agent.cjs",
+  "module": "pan-agent.mjs",
+  "exports": {
+    "import": "./pan-agent.mjs",
+    "require": "./pan-agent.cjs"
+  },
+  "types": "./index.d.ts",
+  "keywords": [
+    "PAN",
+    "peer-to-peer",
+    "agent",
+    "network",
+    "decentralized"
+  ],
+  "author": "Jay Kuri",
+  "license": "LGPL-2.1-or-later",
+  "engines": {
+    "node": ">=16"
+  },
+  "dependencies": {
+    "ws": "^8.0.0"
+  }
+}
