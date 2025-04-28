@@ -1,6 +1,6 @@
 # pan-agent
 
-A universal JavaScript module for connecting to the [PAN](https://github.com/jayk/pan) (Peer Application Network) via browser or Node.js. Acts as your "agent" on the network — allowing you to join groups, send and receive messages, and interact with other agents in real-time.
+A universal JavaScript module for connecting to the [PAN](https://gitlab.com/jk0ne/pan-node) (Peer Application Network) via browser or Node.js. Acts as your "agent" on the network — allowing you to join groups, send and receive messages, and interact with other agents in real-time.
 
 ## ✨ Features
 
