@@ -18,7 +18,7 @@ import WebSocket from "ws";
 import crypto from "node:crypto";
 import { v5 as uuidv5, validate as isUuid } from "uuid";
 
-export const NULL_UUID = "00000000-0000-0000-0000-000000000000";
+export const NULL_ID = "00000000-0000-0000-0000-000000000000";
 
 /** Generate UUIDv5 or return existing UUID */
 function toUuid(str, namespace) {
@@ -87,8 +87,8 @@ export default class PanAgent extends EventEmitter {
         this.ws = null;
 
         // Identity
-        this.node_id = NULL_UUID;
-        this.conn_id = NULL_UUID;
+        this.node_id = NULL_ID;
+        this.conn_id = NULL_ID;
 
         // Stats
         this.stats = {
@@ -175,8 +175,8 @@ export default class PanAgent extends EventEmitter {
         }
 
         const p = reply.payload || {};
-        this.node_id = p.node_id || NULL_UUID;
-        this.conn_id = p.conn_id || NULL_UUID;
+        this.node_id = p.node_id || NULL_ID;
+        this.conn_id = p.conn_id || NULL_ID;
 
         this.state = "AUTHENTICATED";
         this.stats.authenticated_at = nowMs();
@@ -294,8 +294,8 @@ export default class PanAgent extends EventEmitter {
 
         if (!msg.from) {
             msg.from = {
-                node_id: isAuth ? this.node_id : NULL_UUID,
-                conn_id: isAuth ? this.conn_id : NULL_UUID,
+                node_id: isAuth ? this.node_id : NULL_ID,
+                conn_id: isAuth ? this.conn_id : NULL_ID,
             };
         }
 
