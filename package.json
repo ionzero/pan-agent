@@ -22,9 +22,12 @@
   "optionalDependencies": {
     "ws": "^8.0.0"
   },
-  "files": {
+  "files": [
     "pan-agent.js",
     "index.d.ts"
+  ],
+  "dependencies": {
+    "pan-util": "github:ionzero/pan-util",
+    "uuid": "^13.0.0"
   }
 }
-

@@ -17,13 +17,30 @@ import { EventEmitter } from "node:events";
 import WebSocket from "ws";
 import crypto from "node:crypto";
 import { v5 as uuidv5, validate as isUuid } from "uuid";
-
-export const NULL_ID = "00000000-0000-0000-0000-000000000000";
+import { 
+    PAN_ENCODING_MAJOR_BINARY,
+    PAN_ENCODING_MINOR_BINARY,
+    PAN_ENCODING_MAJOR_JSON,
+    PAN_ENCODING_MINOR_JSON,
+    MAX_PAYLOAD_SIZE, 
+    MAX_JSON_ENVELOPE_SIZE, 
+    ROUTING_ENVELOPE_SIZE, 
+    NULL_ID,
+    validateMessageFromAgent, 
+    validateMessageToAgent,
+    encodePacket, 
+    decodePacket,
+} from 'pan-util';
 
 /** Generate UUIDv5 or return existing UUID */
 function toUuid(str, namespace) {
     if (!str) throw new Error("toUuid: empty string");
-    if (isUuid(str)) return str;
+    if (isUuid(namespace)) {
+        return uuidv5(str, namespace);
+    } else if (isUuid(str)) {
+        return str;
+    }
+
     return uuidv5(str, namespace);
 }
 
@@ -76,6 +93,10 @@ export default class PanAgent extends EventEmitter {
         this.url = opts.url;
         this.app_id = opts.app_id;
         this.namespace = opts.namespace || this.app_id;
+        this.encoding = {
+            major: opts.encoding?.major || PAN_ENCODING_MAJOR_JSON,
+            minor: opts.encoding?.minor || PAN_ENCODING_MINOR_JSON
+        };
 
         this.default_ttl = opts.default_ttl ?? 8;
         this.max_ttl = opts.max_ttl ?? 32;
@@ -234,7 +255,7 @@ export default class PanAgent extends EventEmitter {
         if (this.state !== "AUTHENTICATED") throw new Error("Not authenticated");
         const msg = {
             type: "direct",
-            msg_type: this.get_message_type(msgType),
+            //msg_type: this.get_message_type(msgType),
             to,
             payload,
         };
@@ -272,36 +293,55 @@ export default class PanAgent extends EventEmitter {
     // ------------------------------------------------------------
 
     _makeControl(type, payload) {
-        return {
+        let message = {
             type: "control",
-            msg_type: type,
             msg_id: crypto.randomUUID(),
-            payload: payload || {},
             from: { node_id: this.node_id, conn_id: this.conn_id },
+            to: { node_id: this.node_id, conn_id: NULL_ID },
+            payload: {
+                msg_type: type
+            },
         };
+        if (typeof paylaod == 'object') {
+            message.payload = {
+                ...payload,
+                msg_type: type
+            };
+        }
+        return message;
     }
 
     _sendRaw(msg, ttl = this.default_ttl) {
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN)
             throw new Error("WebSocket not open");
 
+        let pkt = {
+            ...msg
+        };
+        pkt.version = {
+            major: this.encoding.major,
+            minor: this.encoding.minor
+        };
         const isAuth = this.state === "AUTHENTICATED";
         const effectiveTtl = isAuth
             ? Math.max(0, Math.min(this.max_ttl, ttl ?? this.default_ttl))
             : 1;
 
-        msg.ttl = effectiveTtl;
+        pkt.ttl = effectiveTtl;
 
-        if (!msg.from) {
-            msg.from = {
+        if (!pkt.from) {
+            pkt.from = {
                 node_id: isAuth ? this.node_id : NULL_ID,
                 conn_id: isAuth ? this.conn_id : NULL_ID,
             };
         }
 
-        if (!msg.msg_id) msg.msg_id = crypto.randomUUID();
+        if (!pkt.msg_id) pkt.msg_id = crypto.randomUUID();
+        console.log('cccc', pkt);
 
-        const raw = JSON.stringify(msg);
+        const raw = encodePacket(pkt);
+        
+//        const raw = JSON.stringify(msg);
         this.stats.bytes_out += Buffer.byteLength(raw);
         this.stats.msgs_out_total++;
         const t = msg.type || "unknown";
@@ -313,7 +353,7 @@ export default class PanAgent extends EventEmitter {
     _bindSocket() {
         this.ws.on("message", (data) => {
             try {
-                const msg = JSON.parse(data.toString());
+                const msg = decodePacket(data);
                 this.stats.bytes_in += data.length;
                 this.stats.msgs_in_total++;
                 const t = msg.type || "unknown";
