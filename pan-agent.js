@@ -4,7 +4,7 @@
 //
 // Implements the finalized spec:
 //   - Clean async interface: connect(), authenticate(), join_group(), leave_group()
-//   - GroupHandle abstraction with .send(), .on(), .off(), .leave()
+//   - PanGroup abstraction with .send(), .on(), .off(), .leave()
 //   - No in_response_to or pending reply logic; all correlation handled by server semantics
 //   - join/leave promises keyed by group_id (UUID)
 //   - Namespace-based UUIDv5 mapping
@@ -13,15 +13,12 @@
 //   - EventEmitter interface for lifecycle + message events
 //
 
-import { EventEmitter } from "node:events";
 import WebSocket from "ws";
-import crypto from "node:crypto";
+import crypto from "crypto";
 import { v5 as uuidv5, validate as isUuid } from "uuid";
 import { 
-    PAN_ENCODING_MAJOR_BINARY,
-    PAN_ENCODING_MINOR_BINARY,
-    PAN_ENCODING_MAJOR_JSON,
-    PAN_ENCODING_MINOR_JSON,
+    PAN_ENCODING_BINARY,
+    PAN_ENCODING_JSON,
     MAX_PAYLOAD_SIZE, 
     MAX_JSON_ENVELOPE_SIZE, 
     ROUTING_ENVELOPE_SIZE, 
@@ -30,60 +27,175 @@ import {
     validateMessageToAgent,
     encodePacket, 
     decodePacket,
+    Dispatcher,
 } from 'pan-util';
-
-/** Generate UUIDv5 or return existing UUID */
-function toUuid(str, namespace) {
-    if (!str) throw new Error("toUuid: empty string");
-    if (isUuid(namespace)) {
-        return uuidv5(str, namespace);
-    } else if (isUuid(str)) {
-        return str;
-    }
-
-    return uuidv5(str, namespace);
-}
 
 function nowMs() {
     return Date.now();
 }
 
-/** GroupHandle helper */
-class GroupHandle {
-    constructor(agent, groupId) {
-        this.agent = agent;
-        this.id = groupId;
-        this.handlers = new Map();
-    }
-
-    async send(msgType, payload, opts = {}) {
-        return this.agent.send_group(this.id, msgType, payload, opts);
-    }
-
-    on(msgType, handler) {
-        const typeId = this.agent.get_message_type(msgType);
-        this.handlers.set(typeId, handler);
-        return this;
-    }
-
-    off(msgType) {
-        const typeId = this.agent.get_message_type(msgType);
-        this.handlers.delete(typeId);
-        return this;
-    }
-
-    async leave() {
-        return this.agent.leave_group(this.id);
-    }
-
-    _dispatch(msg) {
-        const fn = this.handlers.get(msg.msg_type);
-        if (fn) fn(msg.payload, msg);
+function get_uuid_for(str, namespace) {
+   if (isUuid(namespace)) {
+        return uuidv5(type_string, namespace); 
+    } else if (!isUuid(type_string)) {
+        return uuidv5(type_string, this.namespace);
+    } else {
+        return type_string;
     }
 }
 
+/** PanGroup */
+export class PanGroup extends Dispatcher {
+
+    // namespace can not be changed after construction.
+    #namespace
+    // id can not be changed after construction
+    #id
+
+    constructor(options) { 
+        
+        if (! options.agent instanceof PanAgent) {
+            throw new Error('Invalid agent provided');
+        }
+        if (!isUuid(options.namespace)) {
+            throw new Error('Invalid namespace! group namespace is required');
+        }
+        if (!options.name) {
+            throw new Error('A group name is required');
+        }
+        this.active = false;
+        this.agent = options.agent;
+        this.#namespace = options.namespace;
+        this.name = options.name;
+        this.message_types = new Map();
+
+        // if we are given a group uuid, we use it as is.
+        // if we are given something else, we create a uuidv5 with our namespace
+        if (isUuid(options.id)) {
+            this.#id = options.id;
+        } else {
+            this.#id = get_uuid_for(options.name, this.#namespace); 
+        }
+    }
+
+    get_group_id() {
+        return this.#id;
+    }
+
+    send(message_type, payload, opts = {}) {
+        let message_type_id = message_type;
+        if (!isUuid(message_type)) {
+            message_type_id = get_uuid_for(message_type, this.#namespace); 
+        }
+        
+        const msg = {
+            type: "broadcast",
+            spread: opts.spread,
+            ttl: opts.ttl, // if ttl is not defined, the agent will set it appropriately
+            to: {
+                group: this.#id,
+                message_type: message_type_id,
+            },
+            payload,
+        };
+        this.agent.send_msg(msg);
+        return msg;
+    }
+
+    add_message_handler(message_type, fn) {
+        let message_type_id = message_type;
+        if (!isUuid(message_type)) {
+            message_type_id = get_uuid_for(message_type, this.#namespace); 
+        }
+
+        this.message_types.set(message_type, {
+            name: message_type,
+            id: message_type_id,
+            fn: fn
+        });
+
+        this.on(message_type_id, fn);
+        // Updates to message handlers are not automatic, you must call update_group_membership
+        return message_type_id;
+    }
+
+    remove_message_handler(message_type) {
+        let message_type_id = message_type;
+        if (!isUuid(message_type)) {
+            message_type_id = get_uuid_for(message_type, this.#namespace); 
+        }
+        this.message_types.delete(message_type);
+        this.off(message_type_id);
+    }
+
+    // update_group_membership() 
+    // Sync's the current group/message type setup to the node via join_group
+    update_group_membership() {
+        let message_type_ids = [];
+        for (const [key, fn] of Object.entries(this.message_types)) {
+            message_type_ids.push(group.add_message_handler(key, fn));
+        }
+        const msg = createControlMessage("join_group", { group: this.#id, message_type_ids });
+        this.agent.send_msg(msg);
+    }
+
+    leave() {
+        const msg = createControlMessage("leave_group", { group: this.#id });
+        this.agent.send_msg(msg);
+    }
+
+    handle_group_reply(something) {
+        this.emit('joined', something);
+    }
+
+    route_group_message(msg) {
+        this.emit(msg.to.message_type, {
+            group: this,
+            message_type: msg.to.message_type,
+            message: msg
+        });
+    }
+
+    join_complete(msg) {
+        this.emit('membership_updated', {
+            group: this,
+            message_type: msg.to.message_type,
+            message: msg
+        });
+    }
+
+    leave_complete(msg) {
+        this.emit('group_left', {
+            group: this,
+            message_type: msg.to.message_type,
+            message: msg
+        });
+    }
+}
+
+function debug_print_msg(msg) {
+    console.log("Msg ID: ", msg.msg_id);
+    console.log("Type: ", msg.type);
+    if (msg.type == 'control') {
+        console.log("Payload", msg.payload);
+    }   
+}
+
+export function createControlMessage(msg_type, payload, msg_id) {
+    let new_msg = { 
+        payload: { 
+            ...payload,
+            msg_type: msg_type
+        },  
+        type: "control",
+        msg_id: msg_id || uuidv4()
+    };  
+    return new_msg;
+}
+
+
 /** PanAgent main class */
-export default class PanAgent extends EventEmitter {
+export default class PanAgent extends Dispatcher {
     constructor(opts = {}) {
         super();
 
@@ -93,10 +205,7 @@ export default class PanAgent extends EventEmitter {
         this.url = opts.url;
         this.app_id = opts.app_id;
         this.namespace = opts.namespace || this.app_id;
-        this.encoding = {
-            major: opts.encoding?.major || PAN_ENCODING_MAJOR_JSON,
-            minor: opts.encoding?.minor || PAN_ENCODING_MINOR_JSON
-        };
+        this.encoding = PAN_ENCODING_JSON;
 
         this.default_ttl = opts.default_ttl ?? 8;
         this.max_ttl = opts.max_ttl ?? 32;
@@ -124,233 +233,14 @@ export default class PanAgent extends EventEmitter {
         };
 
         // Groups
-        this.groups = new Map(); // groupId -> GroupHandle
+        this.groups = new Map(); // groupId -> PanGroup
         this.pendingJoins = new Map(); // groupId -> {resolve,reject,timeout}
         this.pendingLeaves = new Map();
 
         this._shouldRun = true;
     }
 
-    _log(...a) {
-        if (this.debug) console.log("[PanAgent]", ...a);
-    }
-
-    /** Utility for app developers */
-    get_group_id(str, ns) {
-        return toUuid(str, ns || this.namespace);
-    }
-
-    get_message_type(str, ns) {
-        return toUuid(str, ns || this.namespace);
-    }
-
-    /** Stats getter (deep copy) */
-    get_stats() {
-        return JSON.parse(JSON.stringify(this.stats));
-    }
-
-    /** Connect and perform HELO */
-    async connect() {
-        if (this.state !== "DISCONNECTED") throw new Error("connect() invalid state");
-        this.state = "CONNECTING";
-
-        this.ws = new WebSocket(this.url);
-        this.ws.binaryType = "arraybuffer";
-
-        await new Promise((resolve, reject) => {
-            const timer = setTimeout(() => reject(new Error("WebSocket connect timeout")), 8000);
-            this.ws.once("open", () => {
-                clearTimeout(timer);
-                resolve();
-            });
-            this.ws.once("error", reject);
-        });
-
-        this._bindSocket();
-
-        // Send helo
-        const msg = this._makeControl("helo", {});
-        this._sendRaw(msg, 1);
-
-        // Wait for helo control reply
-        const heloMsg = await this._waitForControl("helo", this.request_timeout);
-        this.emit("helo", heloMsg);
-        this.state = "CONNECTED_UNTRUSTED";
-        this.stats.connected_at = nowMs();
-        return heloMsg;
-    }
-
-    /** Authenticate after helo */
-    async authenticate({ token, tokens }) {
-        if (this.state !== "CONNECTED_UNTRUSTED") throw new Error("Not ready to authenticate");
-
-        const msg = this._makeControl("auth", { token, tokens });
-        this._sendRaw(msg, 1);
-        this.state = "AUTHENTICATING";
-
-        const reply = await this._waitForControl(["auth.ok", "auth.failed"], this.request_timeout);
-        if (reply.msg_type === "auth.failed") {
-            this.emit("auth_failed", reply);
-            this.state = "CONNECTED_UNTRUSTED";
-            throw new Error("Authentication failed");
-        }
-
-        const p = reply.payload || {};
-        this.node_id = p.node_id || NULL_ID;
-        this.conn_id = p.conn_id || NULL_ID;
-
-        this.state = "AUTHENTICATED";
-        this.stats.authenticated_at = nowMs();
-        this.emit("authenticated", p);
-        return p;
-    }
-
-    /** Join group */
-    async join_group(groupId, msgHandlers = {}) {
-        if (this.state !== "AUTHENTICATED") throw new Error("join_group requires authenticated");
-
-        const gId = this.get_group_id(groupId);
-        const group = this.groups.get(gId) || new GroupHandle(this, gId);
-        this.groups.set(gId, group);
-
-        for (const [key, fn] of Object.entries(msgHandlers)) {
-            const mId = this.get_message_type(key);
-            group.on(mId, fn);
-        }
-
-        const msg_types = Array.from(group.handlers.keys());
-        const msg = this._makeControl("join_group", { group: gId, msg_types });
-        this._sendRaw(msg);
-
-        const promise = new Promise((resolve, reject) => {
-            const t = setTimeout(() => {
-                this.pendingJoins.delete(gId);
-                reject(new Error("join_group timeout"));
-            }, this.request_timeout);
-            this.pendingJoins.set(gId, { resolve, reject, t });
-        });
-
-        return promise;
-    }
-
-    /** Leave group */
-    async leave_group(groupId) {
-        const gId = this.get_group_id(groupId);
-        const msg = this._makeControl("leave_group", { group: gId });
-        this._sendRaw(msg);
-
-        const promise = new Promise((resolve, reject) => {
-            const t = setTimeout(() => {
-                this.pendingLeaves.delete(gId);
-                reject(new Error("leave_group timeout"));
-            }, this.request_timeout);
-            this.pendingLeaves.set(gId, { resolve, reject, t });
-        });
-
-        return promise;
-    }
-
-    /** Direct and group sends */
-    send_direct(to, msgType, payload, opts = {}) {
-        if (this.state !== "AUTHENTICATED") throw new Error("Not authenticated");
-        const msg = {
-            type: "direct",
-            //msg_type: this.get_message_type(msgType),
-            to,
-            payload,
-        };
-        this._sendRaw(msg, opts.ttl);
-        return msg.msg_id;
-    }
-
-    send_group(groupId, msgType, payload, opts = {}) {
-        if (this.state !== "AUTHENTICATED") throw new Error("Not authenticated");
-        const msg = {
-            type: "broadcast",
-            group: this.get_group_id(groupId),
-            msg_type: this.get_message_type(msgType),
-            payload,
-        };
-        this._sendRaw(msg, opts.ttl);
-        return msg.msg_id;
-    }
-
-    /** Close connection */
-    close(code = 1000, reason = "client close") {
-        this._shouldRun = false;
-        if (this.ws) {
-            try {
-                this.ws.close(code, reason);
-            } catch {}
-        }
-        this.ws = null;
-        this.state = "DISCONNECTED";
-        this.emit("disconnected", { code, reason });
-    }
-
-    // ------------------------------------------------------------
-    // Internal helpers
-    // ------------------------------------------------------------
-
-    _makeControl(type, payload) {
-        let message = {
-            type: "control",
-            msg_id: crypto.randomUUID(),
-            from: { node_id: this.node_id, conn_id: this.conn_id },
-            to: { node_id: this.node_id, conn_id: NULL_ID },
-            payload: {
-                msg_type: type
-            },
-        };
-        if (typeof paylaod == 'object') {
-            message.payload = {
-                ...payload,
-                msg_type: type
-            };
-        }
-        return message;
-    }
-
-    _sendRaw(msg, ttl = this.default_ttl) {
-        if (!this.ws || this.ws.readyState !== WebSocket.OPEN)
-            throw new Error("WebSocket not open");
-
-        let pkt = {
-            ...msg
-        };
-        pkt.version = {
-            major: this.encoding.major,
-            minor: this.encoding.minor
-        };
-        const isAuth = this.state === "AUTHENTICATED";
-        const effectiveTtl = isAuth
-            ? Math.max(0, Math.min(this.max_ttl, ttl ?? this.default_ttl))
-            : 1;
-
-        pkt.ttl = effectiveTtl;
-
-        if (!pkt.from) {
-            pkt.from = {
-                node_id: isAuth ? this.node_id : NULL_ID,
-                conn_id: isAuth ? this.conn_id : NULL_ID,
-            };
-        }
-
-        if (!pkt.msg_id) pkt.msg_id = crypto.randomUUID();
-        console.log('cccc', pkt);
-
-        const raw = encodePacket(pkt);
-        
-//        const raw = JSON.stringify(msg);
-        this.stats.bytes_out += Buffer.byteLength(raw);
-        this.stats.msgs_out_total++;
-        const t = msg.type || "unknown";
-        this.stats.msgs_out_by_type[t] = (this.stats.msgs_out_by_type[t] || 0) + 1;
-
-        this.ws.send(raw);
-    }
-
-    _bindSocket() {
+    setup_websocket() {
         this.ws.on("message", (data) => {
             try {
                 const msg = decodePacket(data);
@@ -359,7 +249,8 @@ export default class PanAgent extends EventEmitter {
                 const t = msg.type || "unknown";
                 this.stats.msgs_in_by_type[t] =
                     (this.stats.msgs_in_by_type[t] || 0) + 1;
-                this._dispatch(msg);
+                //console.log("INBOUND MSG:", msg);
+                this.handle_inbound_message(msg);
             } catch (e) {
                 this._log("Bad JSON", e);
             }
@@ -377,82 +268,233 @@ export default class PanAgent extends EventEmitter {
         });
     }
 
-    async _waitForControl(types, timeout) {
-        if (!Array.isArray(types)) types = [types];
-        return new Promise((resolve, reject) => {
-            const timer = setTimeout(() => {
-                this.removeListener("control", onCtrl);
-                reject(new Error("timeout waiting for control " + types.join(",")));
-            }, timeout);
+    /** Connect and perform HELO */
+    async connect() {
+        if (this.state !== "DISCONNECTED") throw new Error("connect() invalid state");
+        this.state = "CONNECTING";
 
-            const onCtrl = (msg) => {
-                if (types.includes(msg.msg_type)) {
-                    clearTimeout(timer);
-                    this.removeListener("control", onCtrl);
-                    resolve(msg);
-                }
-            };
 
-            this.on("control", onCtrl);
+        await new Promise((resolve, reject) => {
+            const timer = setTimeout(() => reject(new Error("WebSocket connect timeout")), 8000);
+            this.ws = new WebSocket(this.url);
+            this.ws.binaryType = "arraybuffer";
+            this.ws.once("open", () => {
+                clearTimeout(timer);
+                resolve();
+            });
+            this.ws.once("error", reject);
         });
+
+        this.setup_websocket();
+
+        // Send helo
+        const msg = createControlMessage('helo', {});
+        this.send_msg(msg, 1);
+
     }
 
-    _dispatch(msg) {
-        if (msg.type === "control") {
-            this._handleControl(msg);
-            return;
-        }
-        if (msg.type === "direct") {
-            this.emit("direct", msg);
-            return;
-        }
-        if (msg.type === "broadcast") {
-            const group = this.groups.get(msg.group);
-            if (group) group._dispatch(msg);
-            this.emit("group", msg);
-            return;
-        }
-        this.emit("message", msg);
+    /** Authenticate after helo */
+    async authenticate({ token, tokens }) {
+        if (this.state !== "CONNECTED_UNTRUSTED") throw new Error("Not ready to authenticate");
+
+        const msg = createControlMessage("auth", { token, tokens });
+        this.send_msg(msg);
+        this.state = "AUTHENTICATING";
+
     }
 
-    _handleControl(msg) {
-        const t = msg.msg_type;
+    handle_auth_result(auth_reply) {
+        if (auth_reply.payload.msg_type === "auth.failed") {
+            this.emit("auth_failed", reply);
+            this.state = "CONNECTED_UNTRUSTED";
+        } else if (auth_reply.payload.msg_type === 'auth.ok') {
+            this.node_id = auth_reply.payload.node_id; 
+            this.conn_id = auth_reply.payload.conn_id;
+
+            this.state = "AUTHENTICATED";
+            this.stats.authenticated_at = nowMs();
+            this.emit("auth_success", auth_reply.payload);
+        }
+    }
+
+    /** Join group */
+    join_group(group_name, message_types = {}) {
+        if (this.state !== "AUTHENTICATED") throw new Error("join_group requires authenticated");
+
+        let group_id = groupName;
+        // if gId is not a uuid already, map it to one using our namespace
+        if (!isUuid(gId)) {
+            group_id = get_uuid_for(group_name, this.namespace);
+        }
+
+        // reuse our existing group if we have one, otherwise create one
+        let group = this.groups.get(group_id);
+        
+        if (!group) {
+            group = new PanGroup({
+                agent: this, 
+                name: group_name,
+                id: group_id,
+                namespace: this.namespace
+            });
+            this.groups.set(group.id, group);
+        }
+
+        let message_type_ids = []
+        for (const [key, fn] of Object.entries(message_types)) {
+            message_type_ids.push(group.add_message_handler(key, fn));
+        }
+        group.update_group_membership();
+        
+        return group;
+    }
+
+    handle_join_group_reply(msg) {
+        const group_id = msg.payload?.group;
+        const group = this.groups.get(group_id);
+        group.join_complete(msg);
+    }
+
+    handle_leave_group_reply(msg) {
+        const group_id = msg.payload?.group;
+        const group = this.groups.get(group_id);
+        group.leave_complete(msg);
+        this.groups.delete(group_id);
+    }
+
+
+    /** Direct and group sends */
+    send_direct(to, msgType, payload, opts = {}) {
+        if (this.state !== "AUTHENTICATED") throw new Error("Not authenticated");
+        const msg = {
+            type: "direct",
+            ttl: opts.ttl ?? this.default_ttl,
+            to,
+            payload,
+        };
+        this.send_msg(msg);
+        return msg.msg_id;
+    }
+
+    /** Close connection */
+    close(code = 1000, reason = "client close") {
+        this._shouldRun = false;
+        if (this.ws) {
+            try {
+                this.ws.close(code, reason);
+            } catch {}
+        }
+        this.ws = null;
+        this.state = "DISCONNECTED";
+        this.emit("disconnected", { code, reason });
+    }
+
+    handle_inbound_message(msg) {
+        let decoded_payload;
+        switch (msg.type) {
+            case 'control':  
+                decoded_payload = JSON.parse(new TextDecoder().decode(msg.payload));
+                msg.payload = decoded_payload;
+                this.dispatch_control_message(msg);
+                break;
+
+            case 'direct':   
+                this.emit("direct_message", msg);
+                break;
+
+            case 'broadcast': 
+                const group = this.groups.get(msg.to.group);
+                if (group) { 
+                    group.route_group_message(msg);
+                }
+                this.emit("group_message", msg);
+                break;
+
+            default: 
+                console.error('unknown message type received: ' + msg.type, err);
+                // we return because we do not want to emit message_received on a bad packet
+                return;
+                break;
+        }
+        debug_print_msg(msg);
+        this.emit("message_received", msg);
+    }
+
+    dispatch_control_message(msg) {
+        const control_message_type = msg.payload.msg_type;
         this.emit("control", msg);
 
-        if (t === "helo") return; // handled by _waitForControl
+        switch (control_msg_type) {
+            case 't': 
+                console.log('GOT A HELO!', heloMsg);
+                this.emit("helo", heloMsg);
+                this.state = "CONNECTED_UNTRUSTED";
+                this.stats.connected_at = nowMs();
+                break;
 
-        if (t === "auth.ok" || t === "auth.failed") return; // handled by _waitForControl
+            case 'auth.ok':
+            case 'auth.failed': 
+                this.handle_auth_result(msg);
+                break;
 
-        if (t === "join_group_reply") {
-            const g = msg.payload?.group;
-            const p = this.pendingJoins.get(g);
-            if (p) {
-                clearTimeout(p.t);
-                this.pendingJoins.delete(g);
-                if (msg.payload?.status === "ok") {
-                    this.emit("group.joined", { group: g });
-                    p.resolve(this.groups.get(g));
-                } else {
-                    p.reject(new Error("join_group failed"));
-                }
-            }
-            return;
+            case 'join_group_reply': 
+                this.handle_join_group_reply(msg);
+                break;
+
+            case 'leave_group_reply': 
+                this.handle_leave_group_reply(msg);
+                break;
+            default: 
+                console.warn('Unknown control message type: ' + control_message_type, msg)
+                break;
         }
-
-        if (t === "leave_group_reply") {
-            const g = msg.payload?.group;
-            const p = this.pendingLeaves.get(g);
-            if (p) {
-                clearTimeout(p.t);
-                this.pendingLeaves.delete(g);
-                if (msg.payload?.status === "ok") {
-                    this.emit("group.left", { group: g });
-                    p.resolve(true);
-                } else {
-                    p.reject(new Error("leave_group failed"));
-                }
-            }
-            return;
-        }
+        return msg;
     }
+
+    send_msg(msg) {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN)
+            throw new Error("WebSocket not open");
+
+        let pkt = {
+            ...msg,
+            from: {
+                node_id: isAuth ? this.node_id : NULL_ID,
+                conn_id: isAuth ? this.conn_id : NULL_ID,
+            },
+            version: this.encoding,
+        };
+        if (msg.type == 'control') {
+            msg.ttl = 1;
+        } else if (typeof msg.ttl == 'undefined') {
+            msg.ttl = this.default_ttl
+        } else {
+            msg.ttl = Math.min(msg.ttl, this.max_ttl);
+        }
+           
+        if (!pkt.msg_id) pkt.msg_id = crypto.randomUUID();
+        //console.log('cccc', pkt);
+
+        const raw = encodePacket(pkt);
+        
+        this.stats.bytes_out += Buffer.byteLength(raw);
+        this.stats.msgs_out_total++;
+        const t = msg.type || "unknown";
+        this.stats.msgs_out_by_type[t] = (this.stats.msgs_out_by_type[t] || 0) + 1;
+
+        this.ws.send(raw);
+    }
+
+
+
+
+    _log(...a) {
+        if (this.debug) console.log("[PanAgent]", ...a);
+    }
+
+
+    /** Stats getter (deep copy) */
+    get_stats() {
+        return JSON.parse(JSON.stringify(this.stats));
+    }
+
 }
