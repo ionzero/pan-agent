@@ -27,8 +27,8 @@ import {
     validateMessageToAgent,
     encodePacket, 
     decodePacket,
-    attachDispatcher,
-} from 'pan-util';
+} from '@ionzero/pan-util';
+import { attachDispatcher } from '@ionzero/dispatcher';
 
 function nowMs() {
     return Date.now();

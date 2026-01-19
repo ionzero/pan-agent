@@ -20,7 +20,7 @@ import fs from "node:fs";
 import readline from "node:readline";
 import process from "node:process";
 
-import PanAgent from "./pan-agent.js";
+import PanAgent from "../pan-agent.js";
 import {
     Identity,
     validateVouchToken,

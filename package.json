@@ -27,7 +27,8 @@
     "index.d.ts"
   ],
   "dependencies": {
-    "pan-util": "github:ionzero/pan-util",
+    "@ionzero/dispatcher": "github:ionzero/dispatcher",
+    "@ionzero/pan-util": "github:ionzero/pan-util",
     "uuid": "^13.0.0"
   }
 }
