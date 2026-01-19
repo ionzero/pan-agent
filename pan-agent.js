@@ -27,7 +27,7 @@ import {
     validateMessageToAgent,
     encodePacket, 
     decodePacket,
-    Dispatcher,
+    attachDispatcher,
 } from 'pan-util';
 
 function nowMs() {
@@ -36,16 +36,16 @@ function nowMs() {
 
 function get_uuid_for(str, namespace) {
    if (isUuid(namespace)) {
-        return uuidv5(type_string, namespace); 
-    } else if (!isUuid(type_string)) {
-        return uuidv5(type_string, this.namespace);
+        return uuidv5(str, namespace); 
+    } else if (!isUuid(str)) {
+        return uuidv5(str, this.namespace);
     } else {
-        return type_string;
+        return str;
     }
 }
 
 /** PanGroup */
-export class PanGroup extends Dispatcher {
+export class PanGroup {
 
     // namespace can not be changed after construction.
     #namespace
@@ -53,7 +53,7 @@ export class PanGroup extends Dispatcher {
     #id
 
     constructor(options) { 
-        
+        attachDispatcher(this);
         if (! options.agent instanceof PanAgent) {
             throw new Error('Invalid agent provided');
         }
@@ -78,7 +78,7 @@ export class PanGroup extends Dispatcher {
         }
     }
 
-    get_group_id() {
+    get_id() {
         return this.#id;
     }
 
@@ -90,10 +90,10 @@ export class PanGroup extends Dispatcher {
         
         const msg = {
             type: "broadcast",
-            spread: opts.spread,
+            spread: opts.spread || opts.ttl,
             ttl: opts.ttl, // if ttl is not defined, the agent will set it appropriately
             to: {
-                group: this.#id,
+                group_id: this.#id,
                 message_type: message_type_id,
             },
             payload,
@@ -132,20 +132,16 @@ export class PanGroup extends Dispatcher {
     // Sync's the current group/message type setup to the node via join_group
     update_group_membership() {
         let message_type_ids = [];
-        for (const [key, fn] of Object.entries(this.message_types)) {
-            message_type_ids.push(group.add_message_handler(key, fn));
-        }
-        const msg = createControlMessage("join_group", { group: this.#id, message_type_ids });
+        this.message_types.forEach( (msg_type_object, key) => {
+            message_type_ids.push(msg_type_object.id);
+        })
+        const msg = this.agent.createControlMessage("join_group", { group: this.#id, message_types: message_type_ids });
         this.agent.send_msg(msg);
     }
 
     leave() {
-        const msg = createControlMessage("leave_group", { group: this.#id });
+        const msg = this.agent.createControlMessage("leave_group", { group: this.#id });
         this.agent.send_msg(msg);
-    }
-
-    handle_group_reply(something) {
-        this.emit('joined', something);
     }
 
     route_group_message(msg) {
@@ -165,12 +161,14 @@ export class PanGroup extends Dispatcher {
     }
 
     leave_complete(msg) {
+        this.message_types.clear();
         this.emit('group_left', {
             group: this,
             message_type: msg.to.message_type,
             message: msg
         });
     }
+
 }
 
 function debug_print_msg(msg) {
@@ -181,24 +179,10 @@ function debug_print_msg(msg) {
     }   
 }
 
-export function createControlMessage(msg_type, payload, msg_id) {
-    let new_msg = { 
-        payload: { 
-            ...payload,
-            msg_type: msg_type
-        },  
-        type: "control",
-        msg_id: msg_id || uuidv4()
-    };  
-    return new_msg;
-}
-
-
 /** PanAgent main class */
-export default class PanAgent extends Dispatcher {
+export default class PanAgent {
     constructor(opts = {}) {
-        super();
-
+        attachDispatcher(this);
         if (!opts.url) throw new Error("PanAgent requires url");
         if (!opts.app_id) throw new Error("PanAgent requires app_id");
 
@@ -249,7 +233,7 @@ export default class PanAgent extends Dispatcher {
                 const t = msg.type || "unknown";
                 this.stats.msgs_in_by_type[t] =
                     (this.stats.msgs_in_by_type[t] || 0) + 1;
-                //console.log("INBOUND MSG:", msg);
+                // console.log("INBOUND MSG:", msg);
                 this.handle_inbound_message(msg);
             } catch (e) {
                 this._log("Bad JSON", e);
@@ -288,24 +272,23 @@ export default class PanAgent extends Dispatcher {
         this.setup_websocket();
 
         // Send helo
-        const msg = createControlMessage('helo', {});
+        const msg = this.createControlMessage('helo', {});
         this.send_msg(msg, 1);
 
     }
 
     /** Authenticate after helo */
-    async authenticate({ token, tokens }) {
+    authenticate({ token, tokens }) {
         if (this.state !== "CONNECTED_UNTRUSTED") throw new Error("Not ready to authenticate");
 
-        const msg = createControlMessage("auth", { token, tokens });
+        const msg = this.createControlMessage("auth", { token, tokens });
         this.send_msg(msg);
         this.state = "AUTHENTICATING";
-
     }
 
     handle_auth_result(auth_reply) {
         if (auth_reply.payload.msg_type === "auth.failed") {
-            this.emit("auth_failed", reply);
+            this.emit("auth_failed", auth_reply);
             this.state = "CONNECTED_UNTRUSTED";
         } else if (auth_reply.payload.msg_type === 'auth.ok') {
             this.node_id = auth_reply.payload.node_id; 
@@ -313,7 +296,7 @@ export default class PanAgent extends Dispatcher {
 
             this.state = "AUTHENTICATED";
             this.stats.authenticated_at = nowMs();
-            this.emit("auth_success", auth_reply.payload);
+            this.emit("auth_success", auth_reply);
         }
     }
 
@@ -321,9 +304,9 @@ export default class PanAgent extends Dispatcher {
     join_group(group_name, message_types = {}) {
         if (this.state !== "AUTHENTICATED") throw new Error("join_group requires authenticated");
 
-        let group_id = groupName;
+        let group_id = group_name;
         // if gId is not a uuid already, map it to one using our namespace
-        if (!isUuid(gId)) {
+        if (!isUuid(group_id)) {
             group_id = get_uuid_for(group_name, this.namespace);
         }
 
@@ -337,7 +320,7 @@ export default class PanAgent extends Dispatcher {
                 id: group_id,
                 namespace: this.namespace
             });
-            this.groups.set(group.id, group);
+            this.groups.set(group_id, group);
         }
 
         let message_type_ids = []
@@ -350,9 +333,13 @@ export default class PanAgent extends Dispatcher {
     }
 
     handle_join_group_reply(msg) {
-        const group_id = msg.payload?.group;
-        const group = this.groups.get(group_id);
-        group.join_complete(msg);
+        try {
+            const group_id = msg.payload?.group;
+            const group = this.groups.get(group_id);
+            group.join_complete(msg);
+        } catch(e) {
+            console.error('Group Join failure for group_id: ', group_id, e);
+        }
     }
 
     handle_leave_group_reply(msg) {
@@ -403,7 +390,7 @@ export default class PanAgent extends Dispatcher {
                 break;
 
             case 'broadcast': 
-                const group = this.groups.get(msg.to.group);
+                const group = this.groups.get(msg.to.group_id);
                 if (group) { 
                     group.route_group_message(msg);
                 }
@@ -416,7 +403,7 @@ export default class PanAgent extends Dispatcher {
                 return;
                 break;
         }
-        debug_print_msg(msg);
+        //debug_print_msg(msg);
         this.emit("message_received", msg);
     }
 
@@ -424,26 +411,31 @@ export default class PanAgent extends Dispatcher {
         const control_message_type = msg.payload.msg_type;
         this.emit("control", msg);
 
-        switch (control_msg_type) {
-            case 't': 
-                console.log('GOT A HELO!', heloMsg);
-                this.emit("helo", heloMsg);
+        switch (control_message_type) {
+            case "helo": 
+                this.emit("helo", msg);
                 this.state = "CONNECTED_UNTRUSTED";
                 this.stats.connected_at = nowMs();
                 break;
 
-            case 'auth.ok':
-            case 'auth.failed': 
+            case "auth.ok":
+            case "auth.failed": 
                 this.handle_auth_result(msg);
                 break;
 
-            case 'join_group_reply': 
+            case "join_group_reply": 
                 this.handle_join_group_reply(msg);
                 break;
 
-            case 'leave_group_reply': 
+            case "leave_group_reply": 
                 this.handle_leave_group_reply(msg);
                 break;
+
+            case "error": 
+                console.warn('protocol error:', msg);
+                this.emit("error", msg);
+                break;
+
             default: 
                 console.warn('Unknown control message type: ' + control_message_type, msg)
                 break;
@@ -458,17 +450,20 @@ export default class PanAgent extends Dispatcher {
         let pkt = {
             ...msg,
             from: {
-                node_id: isAuth ? this.node_id : NULL_ID,
-                conn_id: isAuth ? this.conn_id : NULL_ID,
+                node_id: this.node_id,
+                conn_id: this.conn_id,
             },
             version: this.encoding,
         };
-        if (msg.type == 'control') {
-            msg.ttl = 1;
+        if (pkt.type == 'control') {
+            pkt.ttl = 1;
         } else if (typeof msg.ttl == 'undefined') {
-            msg.ttl = this.default_ttl
+            pkt.ttl = this.default_ttl
         } else {
-            msg.ttl = Math.min(msg.ttl, this.max_ttl);
+            pkt.ttl = Math.min(msg.ttl, this.max_ttl);
+        }
+        if (pkt.type == 'broadcast' && typeof pkt.spread != 'number') {
+            pkt.spread = pkt.ttl;
         }
            
         if (!pkt.msg_id) pkt.msg_id = crypto.randomUUID();
@@ -497,4 +492,19 @@ export default class PanAgent extends Dispatcher {
         return JSON.parse(JSON.stringify(this.stats));
     }
 
+    createControlMessage(msg_type, payload, msg_id) {
+        let new_msg = { 
+            payload: { 
+                ...payload,
+                msg_type: msg_type
+            },  
+            to: {
+                node_id: this.node_id,
+                conn_id: NULL_ID
+            },
+            type: "control",
+            msg_id: msg_id || crypto.randomUUID()
+        };  
+        return new_msg;
+    }
 }
