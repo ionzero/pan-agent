@@ -1,16 +1,16 @@
 {
-  "name": "pan-agent",
+  "name": "pan-actor",
   "version": "3.0.0",
-  "description": "PAN network agent core for browser and Node.js environments",
+  "description": "PAN network actor core for browser and Node.js environments",
   "type": "module",
   "exports": {
-    ".": "./pan-agent.js"
+    ".": "./pan-actor.js"
   },
   "types": "./index.d.ts",
   "keywords": [
     "PAN",
     "peer-to-peer",
-    "agent",
+    "actor",
     "network",
     "decentralized"
   ],
@@ -23,7 +23,7 @@
     "ws": "^8.0.0"
   },
   "files": [
-    "pan-agent.js",
+    "pan-actor.js",
     "index.d.ts"
   ],
   "dependencies": {

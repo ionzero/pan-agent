@@ -1,6 +1,6 @@
-// pan-agent.mjs
+// pan-actor.mjs
 //
-// PAN Agent client for PAN access points (nodes).
+// PAN Actor client for PAN access points (nodes).
 //
 // Implements the finalized spec:
 //   - Clean async interface: connect(), authenticate(), join_group(), leave_group()
@@ -23,8 +23,8 @@ import {
     MAX_JSON_ENVELOPE_SIZE, 
     ROUTING_ENVELOPE_SIZE, 
     NULL_ID,
-    validateMessageFromAgent, 
-    validateMessageToAgent,
+    validateMessageFromActor, 
+    validateMessageToActor,
     encodePacket, 
     decodePacket,
 } from '@ionzero/pan-util';
@@ -54,8 +54,8 @@ export class PanGroup {
 
     constructor(options) { 
         attachDispatcher(this);
-        if (! options.agent instanceof PanAgent) {
-            throw new Error('Invalid agent provided');
+        if (! options.actor instanceof PanActor) {
+            throw new Error('Invalid actor provided');
         }
         if (!isUuid(options.namespace)) {
             throw new Error('Invalid namespace! group namespace is required');
@@ -64,7 +64,7 @@ export class PanGroup {
             throw new Error('A group name is required');
         }
         this.active = false;
-        this.agent = options.agent;
+        this.actor = options.actor;
         this.#namespace = options.namespace;
         this.name = options.name;
         this.message_types = new Map();
@@ -91,14 +91,14 @@ export class PanGroup {
         const msg = {
             type: "broadcast",
             spread: opts.spread || opts.ttl,
-            ttl: opts.ttl, // if ttl is not defined, the agent will set it appropriately
+            ttl: opts.ttl, // if ttl is not defined, the actor will set it appropriately
             to: {
                 group_id: this.#id,
                 message_type: message_type_id,
             },
             payload,
         };
-        this.agent.send_msg(msg);
+        this.actor.send_msg(msg);
         return msg;
     }
 
@@ -135,13 +135,13 @@ export class PanGroup {
         this.message_types.forEach( (msg_type_object, key) => {
             message_type_ids.push(msg_type_object.id);
         })
-        const msg = this.agent.createControlMessage("join_group", { group: this.#id, message_types: message_type_ids });
-        this.agent.send_msg(msg);
+        const msg = this.actor.createControlMessage("join_group", { group: this.#id, message_types: message_type_ids });
+        this.actor.send_msg(msg);
     }
 
     leave() {
-        const msg = this.agent.createControlMessage("leave_group", { group: this.#id });
-        this.agent.send_msg(msg);
+        const msg = this.actor.createControlMessage("leave_group", { group: this.#id });
+        this.actor.send_msg(msg);
     }
 
     route_group_message(msg) {
@@ -179,12 +179,12 @@ function debug_print_msg(msg) {
     }   
 }
 
-/** PanAgent main class */
-export default class PanAgent {
+/** PanActor main class */
+export default class PanActor {
     constructor(opts = {}) {
         attachDispatcher(this);
-        if (!opts.url) throw new Error("PanAgent requires url");
-        if (!opts.app_id) throw new Error("PanAgent requires app_id");
+        if (!opts.url) throw new Error("PanActor requires url");
+        if (!opts.app_id) throw new Error("PanActor requires app_id");
 
         this.url = opts.url;
         this.app_id = opts.app_id;
@@ -315,7 +315,7 @@ export default class PanAgent {
         
         if (!group) {
             group = new PanGroup({
-                agent: this, 
+                actor: this, 
                 name: group_name,
                 id: group_id,
                 namespace: this.namespace
@@ -485,7 +485,7 @@ export default class PanAgent {
 
 
     _log(...a) {
-        if (this.debug) console.log("[PanAgent]", ...a);
+        if (this.debug) console.log("[PanActor]", ...a);
     }
 
 

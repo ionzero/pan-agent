@@ -1,9 +1,9 @@
-# PAN Agent Client
+# PAN Actor Client
 
 PAN (Peer Application Network) is a lightweight, user-centric way to build peer-to-peer applications without a smart central server.
 
 A PAN-based application is **not a service you deploy**.  
-It’s a **class of compatible agents** that connect to the PAN network and talk to each other directly.
+It’s a **class of compatible actors** that connect to the PAN network and talk to each other directly.
 
 If you can connect to a PAN node, your app can participate.
 
@@ -14,15 +14,15 @@ If you can connect to a PAN node, your app can participate.
 ### The simplest way to think about PAN
 
 - A **PAN node** is like a Wi-Fi access point.
-- A **PAN agent** is like a laptop or phone connecting to it.
-- A **PAN app** is a type of software that multiple agents run.
+- A **PAN actor** is like a laptop or phone connecting to it.
+- A **PAN app** is a type of software that multiple actors run.
 - A **PAN group** is a shared communication channel.
-- **Message types** define what kinds of messages agents care about.
+- **Message types** define what kinds of messages actors care about.
 
 There is no “main server” coordinating logic.
 
-Agents connect to any PAN node, join groups, and exchange messages.  
-The intelligence lives **in the agents**, not the network.
+Actors connect to any PAN node, join groups, and exchange messages.  
+The intelligence lives **in the actors**, not the network.
 
 ---
 
@@ -35,23 +35,23 @@ A PAN app is defined by:
 3. A set of **message types** the app understands
 4. Application logic that reacts to messages
 
-All agents with the same `app_id` can interoperate.
+All actors with the same `app_id` can interoperate.
 
 Multiple independent implementations can exist for the same app_id.
 
 ---
 
-## What is an agent?
+## What is an actor?
 
-An **agent** is a running instance of your app.
+An **actor** is a running instance of your app.
 
-Each agent:
+Each actor:
 - connects to a PAN node (an access point)
 - authenticates using its own identity
 - joins one or more groups
 - sends and receives messages
 
-A working PAN app is simply **multiple agents running and talking**.
+A working PAN app is simply **multiple actors running and talking**.
 
 No central coordination required.
 
@@ -69,7 +69,7 @@ Examples:
 Under the hood, group names are converted to UUIDs using UUIDv5.  
 This prevents collisions while keeping development easy.
 
-All agents that join the same group can exchange messages.
+All actors that join the same group can exchange messages.
 
 ---
 
@@ -85,7 +85,7 @@ Examples:
 
 Like groups, message types are converted to UUIDs internally.
 
-Agents subscribe to message types when joining a group, so the network only delivers messages they care about.
+Actors subscribe to message types when joining a group, so the network only delivers messages they care about.
 
 ---
 
@@ -98,23 +98,23 @@ A minimal chat app might define:
   - `"chat"` – user messages
   - `"status"` – online/offline/presence
 
-Each agent:
+Each actor:
 1. Connects to a PAN node
 2. Authenticates
 3. Joins `"chat-room"`
 4. Sends:
    - `{ type: "status", text: "online" }`
    - `{ type: "chat", text: "hello world" }`
-5. Receives messages from other agents in the same group
+5. Receives messages from other actors in the same group
 
 That’s it.  
 No message broker. No central database. No coordination service.
 
 ---
 
-## PAN Agent Client
+## PAN Actor Client
 
-The `PanAgent` module is a **high-level client library** for building PAN apps.
+The `PanActor` module is a **high-level client library** for building PAN apps.
 
 It handles:
 - connection lifecycle
@@ -136,17 +136,17 @@ Those are intentionally left to the app.
 ## Installation
 
 ```bash
-npm install pan-agent vouchsafe ws
+npm install pan-actor vouchsafe ws
 ````
 
 ---
 
-## Creating an Agent
+## Creating an Actor
 
 ```js
-import PanAgent from "./pan-agent.mjs";
+import PanActor from "./pan-actor.mjs";
 
-const agent = new PanAgent({
+const actor = new PanActor({
     url: "ws://localhost:5295",
     app_id: "9a2c2c88-6c5f-4e57-b0b1-0f7fd92e7c3c", // must be a UUID
     // namespace defaults to app_id
@@ -174,7 +174,7 @@ const agent = new PanAgent({
 ### connect()
 
 ```js
-const helo = await agent.connect();
+const helo = await actor.connect();
 ```
 
 * Opens a WebSocket connection
@@ -182,32 +182,32 @@ const helo = await agent.connect();
 * Resolves with the server’s helo response
 * The server proves its identity first
 
-You decide whether to trust the server **before** revealing agent identity.
+You decide whether to trust the server **before** revealing actor identity.
 
 ---
 
 ### authenticate()
 
 ```js
-await agent.authenticate({ token });
+await actor.authenticate({ token });
 ```
 
 * Sends authentication token (typically Vouchsafe)
 * On success:
 
-  * agent receives `node_id` and `conn_id`
-  * agent enters authenticated state
+  * actor receives `node_id` and `conn_id`
+  * actor enters authenticated state
 * On failure:
 
   * promise rejects
-  * agent remains untrusted
+  * actor remains untrusted
 
 ---
 
 ## Joining Groups
 
 ```js
-const group = await agent.join_group("chat-room", {
+const group = await actor.join_group("chat-room", {
     chat: (payload, msg) => {
         console.log("chat:", payload.text);
     },
@@ -250,13 +250,13 @@ GroupHandle methods:
 ### Group message
 
 ```js
-agent.send_group("chat-room", "chat", { text: "hello" });
+actor.send_group("chat-room", "chat", { text: "hello" });
 ```
 
 ### Direct message
 
 ```js
-agent.send_direct(
+actor.send_direct(
     { node_id, conn_id },
     "ping",
     { time: Date.now() }
@@ -277,7 +277,7 @@ TTL controls how far messages propagate across the PAN network.
   * TTL is clamped to a maximum
 
 ```js
-agent.send_group("chat-room", "chat", { text: "hi" }, { ttl: 4 });
+actor.send_group("chat-room", "chat", { text: "hi" }, { ttl: 4 });
 ```
 
 Lower TTL = tighter scope
@@ -287,16 +287,16 @@ Higher TTL = wider reach
 
 ## Events
 
-Agents emit high-level events only.
+Actors emit high-level events only.
 
 ```js
-agent.on("helo", msg => {});
-agent.on("authenticated", info => {});
-agent.on("auth_failed", info => {});
-agent.on("disconnected", info => {});
-agent.on("direct", msg => {});
-agent.on("group", msg => {});
-agent.on("error", err => {});
+actor.on("helo", msg => {});
+actor.on("authenticated", info => {});
+actor.on("auth_failed", info => {});
+actor.on("disconnected", info => {});
+actor.on("direct", msg => {});
+actor.on("group", msg => {});
+actor.on("error", err => {});
 ```
 
 ---
@@ -304,7 +304,7 @@ agent.on("error", err => {});
 ## Stats
 
 ```js
-const stats = agent.get_stats();
+const stats = actor.get_stats();
 ```
 
 Includes:
@@ -326,7 +326,7 @@ PAN is intentionally:
 
 You don’t deploy a backend and wait for users.
 
-You publish an app, and agents connect wherever they can.
+You publish an app, and actors connect wherever they can.
 
 The network just moves messages.
 

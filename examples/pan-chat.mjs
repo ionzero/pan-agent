@@ -2,7 +2,7 @@
 /**
  * pan-chat.mjs
  *
- * Minimal interactive PAN chat tester using the new PanAgent interface.
+ * Minimal interactive PAN chat tester using the new PanActor interface.
  *
  * Flow:
  *  1) connect()  -> receive helo
@@ -21,7 +21,7 @@ import readline from "node:readline";
 import process from "node:process";
 import { v5 as uuidv5, validate as isUuid } from "uuid";
 
-import PanAgent from "../pan-agent.js";
+import PanActor from "../pan-actor.js";
 import {
     Identity,
     validateVouchToken,
@@ -118,7 +118,7 @@ async function decideTrust(heloMsg) {
             const decoded = await validateVouchToken(heloToken);
             const appClaims = getAppClaims(decoded);
 
-            if (appClaims?.purpose && appClaims.purpose !== "agent-helo") {
+            if (appClaims?.purpose && appClaims.purpose !== "actor-helo") {
                 console.error(`[trust] unexpected helo purpose: ${appClaims.purpose}`);
                 return false;
             }
@@ -139,7 +139,7 @@ async function mintAuthToken(identity) {
     const exp = Math.floor(Date.now() / 1000) + 60;
 
     const claims = {
-        purpose: "agent-connect",
+        purpose: "actor-connect",
         exp,
     };
 
@@ -170,7 +170,7 @@ async function main() {
     let myStatus = 'online'; 
     const peerStatus = new Map();
 
-    const agent = new PanAgent({
+    const actor = new PanActor({
         url: args.url,
         app_id: args.appId,
         namespace: args.namespace || args.appId,
@@ -179,24 +179,24 @@ async function main() {
         debug: false,
     });
 
-    agent.on("connected", () => {
+    actor.on("connected", () => {
         console.log(`[net] connected to ${args.url}`);
     });
 
-    agent.on("disconnected", (info) => {
+    actor.on("disconnected", (info) => {
         console.log(`[net] disconnected code=${info.code} reason=${info.reason}`);
         process.exit(1);
     });
 
-    agent.on("error", (err) => {
+    actor.on("error", (err) => {
         console.error(`[net] error: ${err.payload.message}`);
     });
 
     /* ---------------- HELO ---------------- */
 
-    await agent.connect();
+    await actor.connect();
 
-    let { data } = await agent.waitFor('helo');
+    let { data } = await actor.waitFor('helo');
     
     console.log(`[net] got Helo`);
     // decide trust:
@@ -206,7 +206,7 @@ async function main() {
     const trusted = await decideTrust(data);
     if (!trusted) {
         console.log("[trust] rejected; disconnecting");
-        agent.close(1000, "untrusted server");
+        actor.close(1000, "untrusted server");
         process.exit(1);
     }
 
@@ -214,26 +214,26 @@ async function main() {
     
     if (isUuid(args.reconnectConnId)) {
         console.log("attempting to reconnect to conn_id: ", args.reconnectConnId);
-        agent.conn_id = args.reconnectConnId;
+        actor.conn_id = args.reconnectConnId;
     }
 
     // trigger authentication
     const authToken = await mintAuthToken(identity);
-    const authInfo = agent.authenticate({ token: authToken });
+    const authInfo = actor.authenticate({ token: authToken });
 
-    const authResult = await agent.waitFor(['auth_success', 'auth_failed'], { timeout: 6000 });
+    const authResult = await actor.waitFor(['auth_success', 'auth_failed'], { timeout: 6000 });
 
     if (authResult.event == 'auth_failed') {
         console.log('Authorization failed: ', msg.payload.message);
-        agent.close(1000, "Authorization failed");
+        actor.close(1000, "Authorization failed");
         process.exit(1);
     } else if (authResult.event == 'auth_success') {
         // authentication succeeded.
         console.log(`[auth] ok node_id=${authResult.data.payload.node_id} `);
         console.log(`[auth] ok conn_id=${authResult.data.payload.conn_id}`);
-        console.log(`[auth] agent=${identity.urn}`);
+        console.log(`[auth] actor=${identity.urn}`);
         // trigger group join
-        group = agent.join_group(args.group, {
+        group = actor.join_group(args.group, {
             chat: (event) => {
                 const payload = JSON.parse(new TextDecoder().decode(event.message.payload));
                 const text = payload?.text ?? String(payload ?? "");
@@ -293,7 +293,7 @@ async function main() {
             console.log("[status] set offline");
         } catch {}
 
-        agent.close(1000, "quit");
+        actor.close(1000, "quit");
         rl.close();
         process.exit(0);
     }

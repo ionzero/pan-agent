@@ -1,4 +1,4 @@
-import { PanAgent } from '../pan-agent.mjs';
+import { PanActor } from '../pan-actor.mjs';
 import assert from 'assert';
 import { uuidv4 } from '../uuid.mjs';
 import jwt from 'jsonwebtoken';
@@ -10,28 +10,28 @@ const CONNECT_TOKEN_SECRET = process.env.PAN_SERVER_TOKEN_SECRET || 'supersecret
 const APP_ID = uuidv4(); // Random namespace for test
 
 
-describe('PanAgent Client Behavior (external node)', function() {
-    let agent;
+describe('PanActor Client Behavior (external node)', function() {
+    let actor;
 
     before(async function() {
         const GENERATED_TOKEN = jwt.sign({
-            identifier: "agent-test"
+            identifier: "actor-test"
         }, CONNECT_TOKEN_SECRET, { 
             expiresIn: 300
         });
 
-        agent = new PanAgent({
+        actor = new PanActor({
             url: NODE_URL,
             token: GENERATED_TOKEN,
             appId: APP_ID
         });
 
-        await agent.connect();
+        await actor.connect();
     });
 
     after(async function() {
-        if (agent?.socket?.readyState === WebSocket.OPEN) {
-            agent.socket.close();
+        if (actor?.socket?.readyState === WebSocket.OPEN) {
+            actor.socket.close();
         }
     });
 
@@ -41,7 +41,7 @@ describe('PanAgent Client Behavior (external node)', function() {
         const payload = { hello: 'first-message' };
         const testType = 'test.direct.first';
 
-        agent.on('direct', (msg) => {
+        actor.on('direct', (msg) => {
             if (msg.msg_type === testType) {
                 assert.strictEqual(msg.type, 'direct');
                 assert.deepStrictEqual(msg.payload, payload);
@@ -49,7 +49,7 @@ describe('PanAgent Client Behavior (external node)', function() {
             }
         });
 
-        agent.sendDirect(agent.nodeId, agent.connId, testType, payload);
+        actor.sendDirect(actor.nodeId, actor.connId, testType, payload);
     });
 
     it('should reconnect and send/receive another direct message', function(done) {
@@ -58,11 +58,11 @@ describe('PanAgent Client Behavior (external node)', function() {
         const payload = { hello: 'second-message' };
         const testType = 'test.direct.second';
 
-        agent.once('disconnected', async () => {
+        actor.once('disconnected', async () => {
             try {
-                await agent.reconnect();
+                await actor.reconnect();
 
-                agent.on('direct', (msg) => {
+                actor.on('direct', (msg) => {
                     if (msg.msg_type === testType) {
                         assert.strictEqual(msg.type, 'direct');
                         assert.deepStrictEqual(msg.payload, payload);
@@ -70,12 +70,12 @@ describe('PanAgent Client Behavior (external node)', function() {
                     }
                 });
 
-                agent.sendDirect(agent.nodeId, agent.connId, testType, payload);
+                actor.sendDirect(actor.nodeId, actor.connId, testType, payload);
             } catch (err) {
                 done(err);
             }
         });
-        agent.disconnect();
+        actor.disconnect();
 
     });
 
@@ -83,22 +83,22 @@ describe('PanAgent Client Behavior (external node)', function() {
         this.timeout(3000);
 
         const BAD_TOKEN = jwt.sign({
-            identifier: "bad-agent"
+            identifier: "bad-actor"
         }, 'wrong-secret', { expiresIn: 300 }); // SIGNED WITH WRONG SECRET
 
-        const badAgent = new PanAgent({
+        const badActor = new PanActor({
             url: NODE_URL,
             token: BAD_TOKEN,
             appId: APP_ID
         });
 
-        badAgent.connect()
+        badActor.connect()
           .then(() => {
-              badAgent.disconnect();
+              badActor.disconnect();
               done(new Error('Should not have connected with bad token'));
           })
           .catch((err) => {
-              badAgent.disconnect();
+              badActor.disconnect();
               assert.ok(err, 'Expected connection failure');
               done();
           });
@@ -111,60 +111,60 @@ describe('PanAgent Client Behavior (external node)', function() {
             foo: "bar" // Missing "identifier"
         }, CONNECT_TOKEN_SECRET, { expiresIn: 300 });
 
-        const badAgent = new PanAgent({
+        const badActor = new PanActor({
             url: NODE_URL,
             token: BAD_TOKEN,
             appId: APP_ID
         });
 
-        badAgent.connect()
+        badActor.connect()
           .then(() => {
-              badAgent.disconnect();
+              badActor.disconnect();
               done(new Error('Should not have connected with missing identifier'));
           })
           .catch((err) => {
-              badAgent.disconnect();
+              badActor.disconnect();
               assert.ok(err, 'Expected connection failure');
               done();
           });
     });
 
-    it('agents should receive only the messages for types they subscribed to', function(done) {
+    it('actors should receive only the messages for types they subscribed to', function(done) {
         this.timeout(5000);
 
         const GENERATED_TOKEN = jwt.sign({
-            identifier: "agent-test-subscribe"
+            identifier: "actor-test-subscribe"
         }, CONNECT_TOKEN_SECRET, { expiresIn: 300 });
 
-        const agentA = new PanAgent({
+        const actorA = new PanActor({
             url: NODE_URL,
             token: GENERATED_TOKEN,
             appId: APP_ID
         });
 
-        const agentB = new PanAgent({
+        const actorB = new PanActor({
             url: NODE_URL,
             token: GENERATED_TOKEN,
             appId: APP_ID
         });
 
-        Promise.all([agentA.connect(), agentB.connect()])
+        Promise.all([actorA.connect(), actorB.connect()])
           .then(async () => {
               const groupName = "testgroup-" + uuidv4();
-              const groupId = agentA.getGroupId(groupName);
+              const groupId = actorA.getGroupId(groupName);
 
-              let agentA_received = false;
-              let agentB_received = false;
+              let actorA_received = false;
+              let actorB_received = false;
 
-              const groupA = await agentA.joinGroup(groupId, {
+              const groupA = await actorA.joinGroup(groupId, {
                   "typeA": (msg) => {
-                      agentA_received = true;
+                      actorA_received = true;
                   }
               });
 
-              const groupB = await agentB.joinGroup(groupId, {
+              const groupB = await actorB.joinGroup(groupId, {
                   "typeB": (msg) => {
-                      agentB_received = true;
+                      actorB_received = true;
                   }
               });
 
@@ -172,11 +172,11 @@ describe('PanAgent Client Behavior (external node)', function() {
               groupA.send("typeB", { data: "A -> B" });
 
               setTimeout(() => {
-                  agentA.disconnect();
-                  agentB.disconnect();
+                  actorA.disconnect();
+                  actorB.disconnect();
                   try {
-                      assert.strictEqual(agentA_received, true, 'AgentA did not receive expected message');
-                      assert.strictEqual(agentB_received, true, 'AgentB did not receive expected message');
+                      assert.strictEqual(actorA_received, true, 'ActorA did not receive expected message');
+                      assert.strictEqual(actorB_received, true, 'ActorB did not receive expected message');
                       done();
                   } catch (err) {
                       done(err);
@@ -186,48 +186,48 @@ describe('PanAgent Client Behavior (external node)', function() {
           .catch(done);
     });
     
-    it('agents should NOT receive messages for types they did not subscribe to', function(done) {
+    it('actors should NOT receive messages for types they did not subscribe to', function(done) {
 	this.timeout(3000);
 
 	const GENERATED_TOKEN = jwt.sign({
-	    identifier: "agent-test-filter"
+	    identifier: "actor-test-filter"
 	}, CONNECT_TOKEN_SECRET, { expiresIn: 300 });
 
-	const agentA = new PanAgent({
+	const actorA = new PanActor({
 	    url: NODE_URL,
 	    token: GENERATED_TOKEN,
 	    appId: APP_ID
 	});
 
-	const agentB = new PanAgent({
+	const actorB = new PanActor({
 	    url: NODE_URL,
 	    token: GENERATED_TOKEN,
 	    appId: APP_ID
 	});
 
-	Promise.all([agentA.connect(), agentB.connect()])
+	Promise.all([actorA.connect(), actorB.connect()])
 	  .then(async () => {
 	      const groupName = "testgroup-" + uuidv4();
-	      const groupId = agentA.getGroupId(groupName);
+	      const groupId = actorA.getGroupId(groupName);
 
-	      const groupA = await agentA.joinGroup(groupId, {
+	      const groupA = await actorA.joinGroup(groupId, {
 		  "allowedA": (msg) => {}
 	      });
 
-	      const groupB = await agentB.joinGroup(groupId, {
+	      const groupB = await actorB.joinGroup(groupId, {
 		  "allowedB": (msg) => {}
 	      });
 
 	      // Attach raw 'broadcast' listeners to catch unexpected message types
-	      agentA.on('broadcast', (msg) => {
+	      actorA.on('broadcast', (msg) => {
 		  if (msg.msg_type !== 'allowedA') {
-		      done(new Error(`AgentA received unexpected message type: ${msg.msg_type}`));
+		      done(new Error(`ActorA received unexpected message type: ${msg.msg_type}`));
 		  }
 	      });
 
-	      agentB.on('broadcast', (msg) => {
+	      actorB.on('broadcast', (msg) => {
 		  if (msg.msg_type !== 'allowedB') {
-		      done(new Error(`AgentB received unexpected message type: ${msg.msg_type}`));
+		      done(new Error(`ActorB received unexpected message type: ${msg.msg_type}`));
 		  }
 	      });
 
@@ -235,8 +235,8 @@ describe('PanAgent Client Behavior (external node)', function() {
               groupB.send("unsubscribedTypeA", { data: "should not see" });
 
 	      setTimeout(() => {
-                  agentA.disconnect();
-                  agentB.disconnect();
+                  actorA.disconnect();
+                  actorB.disconnect();
 		  done(); // if nothing unexpected happened, we're good
 	      }, 1000);
 	  })
