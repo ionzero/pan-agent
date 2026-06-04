@@ -19,6 +19,7 @@
 import fs from "node:fs";
 import readline from "node:readline";
 import process from "node:process";
+import { v5 as uuidv5, validate as isUuid } from "uuid";
 
 import PanAgent from "../pan-agent.js";
 import {
@@ -134,17 +135,13 @@ async function decideTrust(heloMsg) {
 /* Auth token minting                                           */
 /* ------------------------------------------------------------ */
 
-async function mintAuthToken(identity, reconnectConnId) {
+async function mintAuthToken(identity) {
     const exp = Math.floor(Date.now() / 1000) + 60;
 
     const claims = {
         purpose: "agent-connect",
         exp,
     };
-
-    if (reconnectConnId) {
-        claims.reconnect = reconnectConnId;
-    }
 
     return identity.attest(claims);
 }
@@ -215,8 +212,13 @@ async function main() {
 
     console.log("[trust] accepted");
     
+    if (isUuid(args.reconnectConnId)) {
+        console.log("attempting to reconnect to conn_id: ", args.reconnectConnId);
+        agent.conn_id = args.reconnectConnId;
+    }
+
     // trigger authentication
-    const authToken = await mintAuthToken(identity, args.reconnectConnId);
+    const authToken = await mintAuthToken(identity);
     const authInfo = agent.authenticate({ token: authToken });
 
     const authResult = await agent.waitFor(['auth_success', 'auth_failed'], { timeout: 6000 });
@@ -227,10 +229,8 @@ async function main() {
         process.exit(1);
     } else if (authResult.event == 'auth_success') {
         // authentication succeeded.
-        console.log(
-            `[auth] ok node=${shortId(authResult.data.payload.node_id)} ` +
-            `conn=${shortId(authResult.data.payload.conn_id)}`
-        );
+        console.log(`[auth] ok node_id=${authResult.data.payload.node_id} `);
+        console.log(`[auth] ok conn_id=${authResult.data.payload.conn_id}`);
         console.log(`[auth] agent=${identity.urn}`);
         // trigger group join
         group = agent.join_group(args.group, {

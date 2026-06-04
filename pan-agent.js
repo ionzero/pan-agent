@@ -413,6 +413,8 @@ export default class PanAgent {
 
         switch (control_message_type) {
             case "helo": 
+                // on the helo response, we know our node id
+                this.node_id = msg.from.node_id;
                 this.emit("helo", msg);
                 this.state = "CONNECTED_UNTRUSTED";
                 this.stats.connected_at = nowMs();
